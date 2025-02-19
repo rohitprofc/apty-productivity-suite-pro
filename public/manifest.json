@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Apty Chrome Extension",
+  "version": "1.0",
+  "description": "An all-in-one extension for ad-blocking, note-taking, tab management, and productivity tracking.",
+  "permissions": ["sidePanel", "storage", "tabs", "activeTab", "alarms", "notifications"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "action": {
+    "default_title": "Open Side Panel",
+    "default_icon": {
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon48.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["adblocker-content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
