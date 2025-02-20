@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Apty Chrome Extension",
+  "name": "Apty Productivity Suite",
   "version": "2.0",
   "description": "An all-in-one extension for ad-blocking, note-taking, tab management, and productivity tracking.",
   "permissions": ["sidePanel", "storage", "tabs", "activeTab", "alarms", "notifications"],
