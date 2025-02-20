@@ -1,20 +1,29 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Trash, RotateCcw, Search, FolderPlus, PauseCircle, X } from "lucide-react";
+import {
+  Trash,
+  RotateCcw,
+  Search,
+  FolderPlus,
+  PauseCircle,
+  X,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 
 const TabManager = () => {
-  const [tabGroups, setTabGroups] = useState({});
-  const [groupName, setGroupName] = useState("");
+  const [savedSessions, setSavedSessions] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [tabs, setTabs] = useState([]);
   const [snoozedTabs, setSnoozedTabs] = useState([]);
   const [selectedTabs, setSelectedTabs] = useState([]);
   const [autoGroupedTabs, setAutoGroupedTabs] = useState({});
+  const [showSessionsDropdown, setShowSessionsDropdown] = useState(false);
 
-  // Load stored data and initial tabs, and set up auto-grouping
+  // Load saved sessions and snoozed tabs, and fetch open tabs
   useEffect(() => {
-    chrome.storage.local.get(["tabGroups", "snoozedTabs"], (result) => {
-      setTabGroups(result.tabGroups || {});
+    chrome.storage.local.get(["savedSessions", "snoozedTabs"], (result) => {
+      setSavedSessions(result.savedSessions || []);
       setSnoozedTabs(result.snoozedTabs || []);
     });
 
@@ -24,13 +33,12 @@ const TabManager = () => {
     });
   }, []);
 
-  // Listen for tab removals to update state immediately
+  // Listen for tab removals
   useEffect(() => {
     const handleTabRemoved = (tabId) => {
       setTabs((prevTabs) => prevTabs.filter((tab) => tab.id !== tabId));
       setSelectedTabs((prevSelected) => prevSelected.filter((id) => id !== tabId));
     };
-
     chrome.tabs.onRemoved.addListener(handleTabRemoved);
     return () => {
       chrome.tabs.onRemoved.removeListener(handleTabRemoved);
@@ -46,7 +54,6 @@ const TabManager = () => {
         return newTabs;
       });
     };
-
     chrome.tabs.onCreated.addListener(handleTabCreated);
     return () => {
       chrome.tabs.onCreated.removeListener(handleTabCreated);
@@ -62,10 +69,9 @@ const TabManager = () => {
     );
   };
 
-  // Save selected tabs as a group using chrome.tabs.get to ensure details are current
+  // Save selected tabs as a new session (auto-named by timestamp)
   const saveSelectedTabs = () => {
-    const trimmedName = groupName.trim();
-    if (trimmedName === "" || selectedTabs.length === 0) return;
+    if (selectedTabs.length === 0) return;
 
     Promise.all(
       selectedTabs.map(
@@ -73,7 +79,6 @@ const TabManager = () => {
           new Promise((resolve) => {
             chrome.tabs.get(tabId, (tab) => {
               if (chrome.runtime.lastError || !tab) {
-                console.error(`Tab ${tabId} not found`, chrome.runtime.lastError);
                 resolve(null);
               } else {
                 resolve({ title: tab.title || tab.url, url: tab.url });
@@ -81,24 +86,35 @@ const TabManager = () => {
             });
           })
       )
-    )
-      .then((results) => {
-        const tabDetails = results.filter((detail) => detail !== null);
-        if (tabDetails.length === 0) {
-          console.error("No valid tabs to save");
-          return;
-        }
-        const updatedGroups = { ...tabGroups, [trimmedName]: tabDetails };
-        setTabGroups(updatedGroups);
-        setGroupName("");
-        setSelectedTabs([]);
-        chrome.storage.local.set({ tabGroups: updatedGroups }, () => {
-          console.log("Tab group saved:", updatedGroups);
-        });
-      })
-      .catch((error) => {
-        console.error("Error saving tab group:", error);
-      });
+    ).then((results) => {
+      const tabDetails = results.filter((detail) => detail !== null);
+      if (tabDetails.length === 0) return;
+      const newSession = {
+        id: Date.now(),
+        createdAt: new Date().toLocaleString(),
+        tabs: tabDetails,
+      };
+      const updatedSessions = [...savedSessions, newSession];
+      setSavedSessions(updatedSessions);
+      setSelectedTabs([]);
+      chrome.storage.local.set({ savedSessions: updatedSessions });
+    });
+  };
+
+  // Restore a saved session by opening all its tabs
+  const restoreSession = (sessionId) => {
+    const session = savedSessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    session.tabs.forEach(({ url }) => {
+      chrome.tabs.create({ url });
+    });
+  };
+
+  // Delete a saved session
+  const deleteSession = (sessionId) => {
+    const updatedSessions = savedSessions.filter((s) => s.id !== sessionId);
+    setSavedSessions(updatedSessions);
+    chrome.storage.local.set({ savedSessions: updatedSessions });
   };
 
   // Snooze a tab and update local state
@@ -109,7 +125,6 @@ const TabManager = () => {
       title: tab.title,
       url: tab.url,
     };
-
     chrome.tabs.remove(tab.id, () => {
       setSnoozedTabs((prev) => {
         const updated = [...prev, snoozedTabData];
@@ -120,27 +135,11 @@ const TabManager = () => {
     });
   };
 
-  // Close a tab and update local state
+  // Close a tab permanently
   const closeTab = (tabId) => {
     chrome.tabs.remove(tabId, () => {
       setTabs((prev) => prev.filter((t) => t.id !== tabId));
     });
-  };
-
-  // Restore a saved tab group
-  const restoreTabGroup = (name) => {
-    if (!tabGroups[name]) return;
-    tabGroups[name].forEach(({ url }) => {
-      chrome.tabs.create({ url });
-    });
-  };
-
-  // Delete a saved tab group
-  const deleteGroup = (name) => {
-    const updatedGroups = { ...tabGroups };
-    delete updatedGroups[name];
-    setTabGroups(updatedGroups);
-    chrome.storage.local.set({ tabGroups: updatedGroups });
   };
 
   // Restore all snoozed tabs
@@ -162,12 +161,11 @@ const TabManager = () => {
   const autoGroupTabs = (openTabs) => {
     const categories = {
       "Social Media": ["facebook", "twitter", "instagram", "linkedin", "reddit"],
-      "Work": ["gmail", "slack", "notion", "zoom", "trello"],
-      "News": ["bbc", "cnn", "nytimes", "theguardian", "reuters"],
-      "Shopping": ["amazon", "ebay", "walmart", "flipkart", "aliexpress"],
-      "Entertainment": ["youtube", "netflix", "hulu", "spotify", "disney"],
+      Work: ["gmail", "slack", "notion", "zoom", "trello"],
+      News: ["bbc", "cnn", "nytimes", "theguardian", "reuters"],
+      Shopping: ["amazon", "ebay", "walmart", "flipkart", "aliexpress"],
+      Entertainment: ["youtube", "netflix", "hulu", "spotify", "disney"],
     };
-
     const groupedTabs = {};
     openTabs.forEach((tab) => {
       for (const category in categories) {
@@ -205,7 +203,7 @@ const TabManager = () => {
       className="p-4 bg-white rounded-2xl"
     >
       {/* Heading */}
-      <h2 className="text-xl font-bold text-[#E04A2F] mb-4">Tab Manager</h2>
+      <h2 className="text-xl font-bold text-[#E04A2F] mb-4">Tab Manager 🚀</h2>
 
       {/* Search Open Tabs */}
       <div className="flex items-center gap-2 mb-4">
@@ -219,42 +217,53 @@ const TabManager = () => {
         <Search size={20} className="text-gray-500" />
       </div>
 
-      {/* Save Selected Tabs as a Group */}
+      {/* Save Selected Tabs as a Session */}
       <div className="flex items-center gap-2 mb-4">
-        <input
-          type="text"
-          value={groupName}
-          onChange={(e) => setGroupName(e.target.value)}
-          placeholder="Enter group name..."
-          className="w-full p-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:border-[#E04A2F] focus:ring-[#E04A2F]"
-        />
         <button
           onClick={saveSelectedTabs}
           className="bg-[#E04A2F] text-white px-4 py-2 rounded-lg hover:bg-[#C13C25] transition-all flex items-center gap-2"
         >
-          <FolderPlus size={16} /> Save
+          <FolderPlus size={16} /> Save Selection
         </button>
       </div>
 
-      {/* List of Saved Tab Groups */}
-      <ul className="max-h-40 overflow-y-auto">
-        {Object.keys(tabGroups).map((name) => (
-          <li key={name} className="flex justify-between items-center p-2 border-b border-gray-200">
-            <span className="text-sm">{name}</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => restoreTabGroup(name)}
-                className="text-blue-500 hover:text-blue-700 flex items-center gap-1"
-              >
-                <RotateCcw size={16} /> Restore
-              </button>
-              <button onClick={() => deleteGroup(name)} className="text-red-500 hover:text-red-700">
-                <Trash size={16} />
-              </button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {/* Dropdown for Saved Sessions */}
+      <div className="mb-4 relative">
+        <button
+          onClick={() => setShowSessionsDropdown(!showSessionsDropdown)}
+          className="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-all flex items-center gap-2 w-full justify-between"
+        >
+          Saved Sessions
+          {showSessionsDropdown ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+        {showSessionsDropdown && (
+          <ul className="absolute top-full left-0 right-0 bg-white border border-gray-300 rounded-lg shadow-lg mt-2 z-10 max-h-60 overflow-y-auto">
+            {savedSessions.length === 0 ? (
+              <li className="p-2 text-sm text-gray-500">No sessions saved.</li>
+            ) : (
+              savedSessions.map((session) => (
+                <li key={session.id} className="flex justify-between items-center p-2 border-b last:border-b-0">
+                  <span className="text-sm">{session.createdAt}</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => restoreSession(session.id)}
+                      className="text-blue-500 hover:text-blue-700 flex items-center gap-1"
+                    >
+                      <RotateCcw size={16} /> Restore
+                    </button>
+                    <button
+                      onClick={() => deleteSession(session.id)}
+                      className="text-red-500 hover:text-red-700"
+                    >
+                      <Trash size={16} />
+                    </button>
+                  </div>
+                </li>
+              ))
+            )}
+          </ul>
+        )}
+      </div>
 
       {/* Snoozed Tabs Section */}
       {snoozedTabs.length > 0 && (
@@ -270,8 +279,6 @@ const TabManager = () => {
       )}
 
       {/* List of Open Tabs */}
-      <h3 className="text-lg font-semibold mb-2">Manage Tabs</h3>
-
       <ul className="mt-4 max-h-40 overflow-y-auto border-t border-gray-200 pt-2">
         {filteredTabs.map((tab) => (
           <li key={tab.id} className="flex justify-between items-center p-2 border-b border-gray-200">
